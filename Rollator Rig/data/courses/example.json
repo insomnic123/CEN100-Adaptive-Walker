@@ -1,0 +1,14 @@
+{
+  "name": "L-loop with curb",
+  "walker": { "speed_mps": 0.8, "wheel_circ_m": 0.64, "track_m": 0.5 },
+  "rig": { "time_scale": 8 },
+  "corner_radius_m": 0.5,
+  "path": [[3, 3], [3, 11], [13, 11], [13, 20], [24, 20]],
+  "objects": [
+    { "id": "c1", "type": "crack", "s": 4.0, "severity": "large" },
+    { "id": "k1", "type": "curb", "s": 13.0, "height": "high" },
+    { "id": "p1", "type": "slope", "s0": 20.0, "s1": 25.0, "grade_pct": 8 },
+    { "id": "r1", "type": "rough", "s0": 28.0, "s1": 31.0, "level": "light" },
+    { "id": "c2", "type": "crack", "s": 33.5, "severity": "small" }
+  ]
+}
