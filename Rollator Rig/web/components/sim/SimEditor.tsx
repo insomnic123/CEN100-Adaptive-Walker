@@ -41,7 +41,7 @@ export default function SimEditor() {
   const planeApi = useRef<PlaneApi | null>(null);
 
   const length = pathLength(course.path);
-  const { checks, runTimeS, peakSps } = useMemo(() => checkCourse(course), [course]);
+  const { checks, runTimeS, peakRps } = useMemo(() => checkCourse(course), [course]);
   const hasError = checks.some((c) => c.level === "error");
   const selected = course.objects.find((o) => o.id === selectedId) ?? null;
   const live = run !== null && !FINISHED.includes(run.status);
@@ -388,7 +388,7 @@ export default function SimEditor() {
             <dl className="stats">
               <dt>Path length</dt><dd>{length.toFixed(1)} m</dd>
               <dt>Rig run time</dt><dd>{runTimeS ? fmtTime(runTimeS) : "–"}</dd>
-              <dt>Peak wheel speed</dt><dd>{Math.round(peakSps)} steps/s</dd>
+              <dt>Peak wheel speed</dt><dd>{peakRps.toFixed(2)} turns/s</dd>
               <dt>Objects</dt><dd>{course.objects.length}</dd>
             </dl>
             <ul className="checks">

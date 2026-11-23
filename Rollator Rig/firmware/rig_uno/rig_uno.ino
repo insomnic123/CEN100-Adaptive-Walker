@@ -1,0 +1,314 @@
+// Rollator test rig: Arduino Mega 2560 or Uno R3 (same pins; pick the board in the IDE)
+//
+// Servos only:
+//   D5  left wheel   continuous servo (FS90R type)
+//   D6  right wheel  continuous servo
+//   D9  deck yaw     standard servo (SG90): heading, 0-180 deg = -90..+90 deg
+//   D10 deck pitch   standard servo: slopes, curb lift, and the crack/curb jolts
+//   D11 deck roll    standard servo, optional: cross-slope
+// No sensors on this board. Wheel speeds come from data/calibration.json on the laptop,
+// measured once with the ESP32's own Hall sensors (rig_driver.py calibrate).
+//
+// Receives a 50 Hz timeline from pipeline/rig_driver.py over USB serial (115200 baud).
+// Protocol: see pipeline/rig/protocol.py.  Libraries: Servo (built in).
+
+#include <Servo.h>
+
+// ---------------------------------------------------------------- pins
+const uint8_t PIN_WHEEL_L = 5;
+const uint8_t PIN_WHEEL_R = 6;
+const uint8_t PIN_YAW = 9;
+const uint8_t PIN_PITCH = 10;
+const uint8_t PIN_ROLL = 11;
+
+#if defined(ARDUINO_AVR_MEGA2560)
+const uint8_t QUEUE_SIZE = 32;
+#else
+const uint8_t QUEUE_SIZE = 24;
+#endif
+
+// ---------------------------------------------------------------- tuning
+const uint8_t SERVO_CENTRE = 90;
+const int8_t JOLT_DIR = 1;          // flip to -1 if jolts tilt the deck the wrong way
+const uint16_t JOLT_MS = 70;        // how long the deck stays flicked before snapping back
+const uint16_t BUZZ_HALF_MS = 80;   // rough patch: about 6 flicks per second
+
+// ---------------------------------------------------------------- hardware
+Servo wheelL, wheelR, yawServo, pitchServo, rollServo;
+
+// ---------------------------------------------------------------- command queue
+struct Cmd {
+  uint32_t t;      // ms since B
+  uint16_t left;   // wheel pulse width in us, 0 = stop (detached)
+  uint16_t right;
+  uint8_t yaw;     // servo degrees
+  uint8_t pitch;
+  uint8_t roll;
+  uint8_t jolt;    // 0 none, 1 small crack, 2 large crack, 3 curb drop, 4 sync
+  uint8_t buzz;    // 0 off, 1 light, 2 heavy
+};
+Cmd queue[QUEUE_SIZE];
+uint8_t qHead = 0, qCount = 0;
+Cmd cur;
+
+enum State : uint8_t { IDLE, RUNNING, RETURNING };
+State state = IDLE;
+bool ending = false, aborted = false, starvedReported = false;
+uint32_t t0 = 0, executed = 0, lastReport = 0, returnUntil = 0;
+
+// pitch = commanded angle + jolt/buzz offset
+uint8_t pitchBase = SERVO_CENTRE;
+uint32_t joltUntil = 0;
+uint8_t joltAmp = 0;
+uint8_t buzzLevel = 0;
+uint32_t buzzNext = 0;
+bool buzzUp = false;
+int16_t lastPitchWritten = -1;
+
+char line[72];
+uint8_t lineLen = 0;
+
+// ---------------------------------------------------------------- helpers
+void driveWheel(Servo &s, uint8_t pin, uint16_t us) {
+  if (us == 0) {
+    if (s.attached()) s.detach();  // no pulses = no creep
+  } else {
+    if (!s.attached()) s.attach(pin);
+    s.writeMicroseconds(us);
+  }
+}
+
+void stopWheels() {
+  driveWheel(wheelL, PIN_WHEEL_L, 0);
+  driveWheel(wheelR, PIN_WHEEL_R, 0);
+}
+
+void writePitch(int angle) {
+  angle = constrain(angle, 0, 180);
+  if (angle != lastPitchWritten) {
+    pitchServo.write(angle);
+    lastPitchWritten = angle;
+  }
+}
+
+void centreDeck() {
+  yawServo.write(SERVO_CENTRE);
+  rollServo.write(SERVO_CENTRE);
+  pitchBase = SERVO_CENTRE;
+  buzzLevel = 0;
+  joltUntil = 0;
+  writePitch(SERVO_CENTRE);
+}
+
+void clearQueue() {
+  qHead = 0;
+  qCount = 0;
+}
+
+void beginReturn(bool wasAborted, uint32_t now) {
+  aborted = wasAborted;
+  stopWheels();
+  clearQueue();
+  centreDeck();
+  returnUntil = now + 800;  // give the deck time to swing back to centre
+  state = RETURNING;
+}
+
+uint8_t joltAmplitude(uint8_t code) {
+  switch (code) {
+    case 1: return 6;    // small crack
+    case 2: return 12;   // large crack
+    case 3: return 18;   // curb drop
+    case 4: return 10;   // sync jolt
+    default: return 0;
+  }
+}
+
+void updatePitch(uint32_t now) {
+  int offset = 0;
+  if (joltUntil) {
+    if ((int32_t)(now - joltUntil) < 0) offset = JOLT_DIR * joltAmp;
+    else {
+      joltUntil = 0;
+      buzzNext = now + BUZZ_HALF_MS;
+    }
+  } else if (buzzLevel) {
+    if ((int32_t)(now - buzzNext) >= 0) {
+      buzzUp = !buzzUp;
+      buzzNext = now + BUZZ_HALF_MS;
+    }
+    if (buzzUp) offset = JOLT_DIR * (buzzLevel == 1 ? 3 : 6);
+  }
+  writePitch(pitchBase + offset);
+}
+
+void apply(const Cmd &c, uint32_t now) {
+  if (c.left != cur.left) driveWheel(wheelL, PIN_WHEEL_L, c.left);
+  if (c.right != cur.right) driveWheel(wheelR, PIN_WHEEL_R, c.right);
+  if (c.yaw != cur.yaw) yawServo.write(c.yaw);
+  if (c.roll != cur.roll) rollServo.write(c.roll);
+  pitchBase = c.pitch;
+  buzzLevel = c.buzz;
+  if (c.jolt) {
+    joltAmp = joltAmplitude(c.jolt);
+    joltUntil = now + JOLT_MS;
+  }
+  cur = c;
+}
+
+// Parses up to `n` comma-separated integers after the first comma. Returns how many it read.
+uint8_t parseInts(char *s, long *v, uint8_t n) {
+  char *p = strchr(s, ',');
+  uint8_t i = 0;
+  while (p && i < n) {
+    p++;
+    char *end;
+    v[i] = strtol(p, &end, 10);
+    if (end == p) break;
+    i++;
+    p = (*end == ',') ? end : nullptr;
+  }
+  return i;
+}
+
+bool parseT(char *s) {
+  long v[8];
+  if (parseInts(s, v, 8) != 8) return false;
+  if (qCount >= QUEUE_SIZE) {
+    Serial.println(F("ERR,queue overflow"));
+    return true;
+  }
+  Cmd &c = queue[(qHead + qCount) % QUEUE_SIZE];
+  c.t = (uint32_t)v[0];
+  c.left = (uint16_t)constrain(v[1], 0, 2500);
+  c.right = (uint16_t)constrain(v[2], 0, 2500);
+  c.yaw = (uint8_t)constrain(v[3], 0, 180);
+  c.pitch = (uint8_t)constrain(v[4], 0, 180);
+  c.roll = (uint8_t)constrain(v[5], 0, 180);
+  c.jolt = (uint8_t)v[6];
+  c.buzz = (uint8_t)v[7];
+  qCount++;
+  return true;
+}
+
+void sendReady() {
+  Serial.print(F("READY,"));
+  Serial.println(QUEUE_SIZE);
+}
+
+void handleLine(char *s, uint32_t now) {
+  long v[2];
+  switch (s[0]) {
+    case 'T':
+      if (!parseT(s)) Serial.println(F("ERR,bad T line"));
+      break;
+    case 'B':
+      t0 = now;
+      executed = 0;
+      lastReport = 0;
+      ending = aborted = starvedReported = false;
+      cur = Cmd{0, 0, 0, SERVO_CENTRE, SERVO_CENTRE, SERVO_CENTRE, 0, 0};
+      state = RUNNING;
+      break;
+    case 'E':
+      ending = true;
+      break;
+    case 'X':
+      if (state == IDLE) Serial.println(F("DONE,aborted"));
+      else beginReturn(true, now);
+      break;
+    case 'H':
+      stopWheels();
+      clearQueue();
+      centreDeck();
+      state = IDLE;
+      sendReady();
+      break;
+    case 'C':  // calibration: C,left_us,right_us drives the wheels directly (0 = stop)
+      if (state == IDLE && parseInts(s, v, 2) == 2) {
+        driveWheel(wheelL, PIN_WHEEL_L, (uint16_t)constrain(v[0], 0, 2500));
+        driveWheel(wheelR, PIN_WHEEL_R, (uint16_t)constrain(v[1], 0, 2500));
+        Serial.println(F("OK"));
+      } else {
+        Serial.println(F("ERR,C only works while idle"));
+      }
+      break;
+    default:
+      Serial.println(F("ERR,unknown command"));
+  }
+}
+
+void readSerial(uint32_t now) {
+  while (Serial.available()) {
+    char ch = Serial.read();
+    if (ch == '\r') continue;
+    if (ch == '\n') {
+      line[lineLen] = 0;
+      if (lineLen) handleLine(line, now);
+      lineLen = 0;
+    } else if (lineLen < sizeof(line) - 1) {
+      line[lineLen++] = ch;
+    }
+  }
+}
+
+void report(uint32_t t) {
+  Serial.print(F("P,"));
+  Serial.print(t);
+  Serial.print(',');
+  Serial.print(executed);
+  Serial.print(',');
+  Serial.println(qCount);
+}
+
+// ---------------------------------------------------------------- setup / loop
+void setup() {
+  Serial.begin(115200);
+  yawServo.attach(PIN_YAW);
+  pitchServo.attach(PIN_PITCH);
+  rollServo.attach(PIN_ROLL);
+  centreDeck();
+  stopWheels();  // wheel servos stay detached until a run moves them
+  sendReady();
+}
+
+void loop() {
+  uint32_t now = millis();
+  readSerial(now);
+
+  if (state == RUNNING) {
+    uint32_t t = now - t0;
+    while (qCount && queue[qHead].t <= t) {
+      apply(queue[qHead], now);
+      qHead = (qHead + 1) % QUEUE_SIZE;
+      qCount--;
+      executed++;
+      starvedReported = false;
+    }
+    if (!qCount) {
+      if (ending && t >= cur.t) {
+        beginReturn(false, now);
+      } else if (!ending && t > cur.t + 100) {
+        stopWheels();  // laptop fell behind: hold still rather than run blind
+        cur.left = cur.right = 0;
+        if (!starvedReported) {
+          Serial.println(F("ERR,starved"));
+          starvedReported = true;
+        }
+      }
+    }
+  }
+
+  updatePitch(now);
+
+  // progress reports continue while returning, so the laptop knows the rig is alive
+  if (state != IDLE && now - t0 - lastReport >= 50) {
+    lastReport = now - t0;
+    report(lastReport);
+  }
+
+  if (state == RETURNING && (int32_t)(now - returnUntil) >= 0) {
+    state = IDLE;
+    Serial.println(aborted ? F("DONE,aborted") : F("DONE"));
+  }
+}

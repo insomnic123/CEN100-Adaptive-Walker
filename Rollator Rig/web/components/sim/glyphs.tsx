@@ -9,11 +9,11 @@ export const OBJECT_COLOURS: Record<ObjectType, string> = {
 };
 
 export const PALETTE: { type: ObjectType; label: string; hint: string }[] = [
-  { type: "crack", label: "Crack", hint: "One tap" },
+  { type: "crack", label: "Crack", hint: "Quick jolt" },
   { type: "curb", label: "Curb", hint: "Stop, lift, drop" },
   { type: "slope", label: "Slope", hint: "Pitch zone" },
   { type: "cross", label: "Cross-slope", hint: "Roll zone" },
-  { type: "rough", label: "Rough patch", hint: "Buzz zone" },
+  { type: "rough", label: "Rough patch", hint: "Shake zone" },
 ];
 
 /** Point glyph drawn at (x, y) in SVG pixels. */

@@ -1,10 +1,11 @@
 // Course geometry. Mirrors pipeline/rig/course.py: keep the two in step.
 import type { Course, CourseObject, Pt } from "./types";
 
-export const STEPS_PER_REV = 4096;
-export const MAX_WHEEL_SPS = 1000;
+// Rig limits (servo rig: continuous-servo wheels, standard-servo deck). Mirror pipeline/rig/compiler.py.
+export const WHEEL_MAX_RPS = 1.2; // typical FS90R top speed with margin; calibration may allow more
+export const YAW_LIMIT_DEG = 90; // yaw servo travel either side of the starting direction
 export const SERVO_LIMIT_DEG = 25;
-export const SETUP_S = 6; // Time to get the walker moving and the rig ready before the course starts
+export const SETUP_S = 6; // standstill + sync tap before the wheels move
 export const CURB_PAUSE_S = 1;
 
 const dist = (a: Pt, b: Pt) => Math.hypot(b[0] - a[0], b[1] - a[1]);
@@ -63,6 +64,22 @@ export function subpath(path: Pt[], s0: number, s1: number): Pt[] {
   return out;
 }
 
+/** Furthest the path ever points away from its first leg's direction. */
+export function maxHeadingDeg(path: Pt[]): number {
+  let total = 0;
+  let worst = 0;
+  let prev: number | null = null;
+  for (let i = 1; i < path.length; i++) {
+    const h = Math.atan2(path[i][1] - path[i - 1][1], path[i][0] - path[i - 1][0]);
+    if (prev !== null) {
+      total += Math.atan2(Math.sin(h - prev), Math.cos(h - prev));
+      worst = Math.max(worst, Math.abs(total));
+    }
+    prev = h;
+  }
+  return (worst * 180) / Math.PI;
+}
+
 export function netTurnDeg(path: Pt[]): number {
   let total = 0;
   let prev: number | null = null;
@@ -76,7 +93,7 @@ export function netTurnDeg(path: Pt[]): number {
 
 export type Check = { level: "error" | "warning" | "ok"; text: string };
 
-export function checkCourse(c: Course): { checks: Check[]; length: number; runTimeS: number; peakSps: number } {
+export function checkCourse(c: Course): { checks: Check[]; length: number; runTimeS: number; peakRps: number } {
   const checks: Check[] = [];
   const length = pathLength(c.path);
   const v = c.walker.speed_mps / c.rig.time_scale;
@@ -85,19 +102,22 @@ export function checkCourse(c: Course): { checks: Check[]; length: number; runTi
   const r = Math.max(c.corner_radius_m, 0.05);
   const turns = c.path.length >= 3;
   const peakV = turns ? v * (1 + c.walker.track_m / (2 * r)) : v;
-  const peakSps = (peakV / c.walker.wheel_circ_m) * STEPS_PER_REV;
+  const peakRps = peakV / c.walker.wheel_circ_m;
 
   if (c.path.length < 2) checks.push({ level: "error", text: "Draw a path with at least two points." });
-  if (peakSps > MAX_WHEEL_SPS) {
-    const k = (c.rig.time_scale * peakSps) / MAX_WHEEL_SPS;
+  if (peakRps > WHEEL_MAX_RPS) {
+    const k = (c.rig.time_scale * peakRps) / WHEEL_MAX_RPS;
     checks.push({
       level: "error",
-      text: `Wheels would need ${Math.round(peakSps)} steps/s in corners (limit ${MAX_WHEEL_SPS}). Raise the time scale to at least ${Math.ceil(k * 10) / 10}, or increase the corner radius.`,
+      text: `Wheels would need ${peakRps.toFixed(2)} turns/s in corners (servo limit about ${WHEEL_MAX_RPS}). Raise the time scale to at least ${Math.ceil(k * 10) / 10}, or increase the corner radius.`,
     });
   }
-  const turn = netTurnDeg(c.path);
-  if (Math.abs(turn) > 360)
-    checks.push({ level: "error", text: `Path turns ${Math.round(turn)}° in total; keep it within ±360° so the turntable wires don't wind up.` });
+  const reach = maxHeadingDeg(c.path);
+  if (reach > YAW_LIMIT_DEG + 0.5)
+    checks.push({
+      level: "error",
+      text: `The path points up to ${Math.round(reach)}° away from its first leg; the yaw servo covers ±${YAW_LIMIT_DEG}°. Keep every leg within ±${YAW_LIMIT_DEG}° of the first one (a right turn needs a left turn before another right).`,
+    });
   for (const o of c.objects) {
     if (o.type === "slope" || o.type === "cross") {
       const pct = o.type === "slope" ? o.grade_pct : o.tilt_pct;
@@ -111,7 +131,7 @@ export function checkCourse(c: Course): { checks: Check[]; length: number; runTi
   if (c.objects.some((o) => o.type === "cross"))
     checks.push({ level: "warning", text: "Cross-slope needs the optional roll servo on pin 11." });
   if (!checks.some((x) => x.level !== "ok")) checks.push({ level: "ok", text: "Ready to run." });
-  return { checks, length, runTimeS, peakSps };
+  return { checks, length, runTimeS, peakRps };
 }
 
 export function objectLabel(o: CourseObject): string {
@@ -128,7 +148,7 @@ export function objectLabel(o: CourseObject): string {
 export const EXAMPLE_COURSE: Course = {
   name: "L-loop with curb",
   walker: { speed_mps: 0.8, wheel_circ_m: 0.64, track_m: 0.5 },
-  rig: { time_scale: 8 },
+  rig: { time_scale: 2 },
   corner_radius_m: 0.5,
   path: [[3, 3], [3, 11], [13, 11], [13, 20], [24, 20]],
   objects: [
