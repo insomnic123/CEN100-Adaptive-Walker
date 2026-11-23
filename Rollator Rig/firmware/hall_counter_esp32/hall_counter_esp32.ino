@@ -1,6 +1,6 @@
 // ESP32: Hall-pulse counter for calibrating the rig's wheel servos.
 //
-// Wiring is the sensor kit's (see hardware/sensor_kit): A3144 OUT on GPIO 34 (left wheel)
+// Wiring is the sensor kit's: A3144 OUT on GPIO 34 (left wheel)
 // and GPIO 35 (right wheel), each with a 10 k pull-up to 3V3. 8 magnets per wheel.
 // Prints "H,<ms>,<left_count>,<right_count>" every 100 ms at 115200 baud over USB.
 // Used by: python rig_driver.py calibrate --port <Arduino port> --esp-port <ESP32 port>

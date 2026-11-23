@@ -22,10 +22,6 @@ rollator-rig/
 │   ├── rig_bench/rig_bench.ino                same, for testing without the ESP32 (wheel flips/trims in the sketch)
 │   ├── hall_counter_esp32/hall_counter_esp32.ino   ESP32: counts wheel magnets (calibration)
 │   └── sensor_esp32/                          (next) full sensor kit: IMU + Hall + button, UDP
-├── hardware/
-│   ├── generate_schematics.py     builds both KiCad schematics
-│   ├── rig_controller/            KiCad project + PDF: Uno + servos
-│   └── sensor_kit/                KiCad project + PDF: ESP32 + MPU-9250 + A3144s + button
 ├── pipeline/                      Python on the laptop
 │   ├── requirements.txt
 │   ├── rig_driver.py              CLI: ports / spin / calibrate / compile / run / watch
@@ -63,8 +59,8 @@ Every servo's red wire goes to the power module's 5 V rail and brown wire to its
 The power module (jumper at 5 V) is fed by a phone charger or a spare laptop USB port.
 Leave D0/D1 free.
 
-**Sensor kit (ESP32)**: unchanged, see `hardware/sensor_kit/sensor_kit.pdf`
-(MPU-9250 on GPIO 21/22/19; A3144s on GPIO 34/35 with 10 kΩ pull-ups to 3V3; button on GPIO 18).
+**Sensor kit (ESP32)**: MPU-9250 on GPIO 21 (SDA) / 22 (SCL) / 19 (INT); A3144s on GPIO 34/35
+with 10 kΩ pull-ups to 3V3; button on GPIO 18 to GND.
 
 ## Setup
 
