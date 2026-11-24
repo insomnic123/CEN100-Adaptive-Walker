@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { checkCourse, DEFAULT_DECK, EMPTY_COURSE, EXAMPLE_COURSE, objectLabel, pathLength } from "@/lib/course";
 import type { DeckSettings } from "@/lib/course";
-import type { Course, CourseObject, ObjectType, Pt, Run } from "@/lib/types";
+import type { Course, CourseObject, ObjectType, Pt, Run, RunResults } from "@/lib/types";
 import { isZone } from "@/lib/types";
 import Plane, { type DragNew, type Mode, type PlaneApi } from "./Plane";
 import { PALETTE, PaletteIcon } from "./glyphs";
+import Results from "./Results";
 
 const DRAFT_KEY = "rig-sandbox-draft";
 const FINISHED: Run["status"][] = ["done", "error", "aborted"];
@@ -38,6 +39,7 @@ export default function SimEditor() {
   const [savedId, setSavedId] = useState<number | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [run, setRun] = useState<Run | null>(null);
+  const [results, setResults] = useState<{ id: number; data: RunResults } | null>(null);
   const [queuedSince, setQueuedSince] = useState<number | null>(null);
   const planeApi = useRef<PlaneApi | null>(null);
 
@@ -95,6 +97,23 @@ export default function SimEditor() {
     }, 400);
     return () => clearInterval(t);
   }, [run]);
+
+  // ---- results: once a run is done, fetch what the sensor kit detected (404 = no ESP32 recorded)
+  const doneId = run?.status === "done" ? run.id : null;
+  useEffect(() => {
+    if (doneId === null) return;
+    let cancelled = false;
+    fetch(`/api/runs/${doneId}/results`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: RunResults | null) => {
+        if (!cancelled && data) setResults({ id: doneId, data });
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [doneId]);
+  const runResults = results && run && results.id === run.id ? results.data : null;
 
   // ---- course updates
   const update = (patch: Partial<Course>) => setCourse((c) => ({ ...c, ...patch }));
@@ -419,7 +438,8 @@ export default function SimEditor() {
                 <div style={{ width: `${(runS / Math.max(length, 0.01)) * 100}%` }} />
               </div>
               <p className="hint">{runS.toFixed(1)} of {length.toFixed(1)} m</p>
-              {run.message && <p className="hint">{run.message}</p>}
+              {run.message && !runResults && <p className="hint">{run.message}</p>}
+              {runResults && <Results results={runResults} />}
               {driverIdle && (
                 <p className="hint warn">
                   Waiting for the driver. Start it with:

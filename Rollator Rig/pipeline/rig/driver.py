@@ -81,7 +81,8 @@ def send_trims(link, trims: dict | None = None) -> None:
 
 def stream(link, compiled: Compiled, run_dir: Path,
            on_progress: Callable[[float], None] | None = None,
-           should_abort: Callable[[], bool] | None = None) -> dict:
+           should_abort: Callable[[], bool] | None = None,
+           on_begin: Callable[[float], None] | None = None) -> dict:
     """Send the timeline, keep the Arduino's queue topped up, log every progress report."""
     if compiled.errors:
         raise RigError("course has errors:\n  " + "\n  ".join(compiled.errors))
@@ -112,6 +113,8 @@ def stream(link, compiled: Compiled, run_dir: Path,
 
     top_up()                                         # prefill before the clock starts
     link.write(b"B\n")
+    if on_begin:
+        on_begin(time.monotonic())                   # the run clock's t = 0, for the sensor log
     ended = aborted = False
     last_report = time.monotonic()
     last_ui = 0.0

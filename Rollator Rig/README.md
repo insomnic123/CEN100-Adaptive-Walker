@@ -24,13 +24,16 @@ rollator-rig/
 │   ├── rig_bench/rig_bench.ino                same, for testing without the ESP32 (wheel flips/trims in the sketch)
 │   ├── photo_counter_esp32/photo_counter_esp32.ino ESP32: counts wheel holes (calibration)
 │   ├── part_tests/                            tiny sketches to check each part (see its README)
-│   └── sensor_esp32/                          (next) full sensor kit: IMU + wheel counters + button, UDP
+│   └── sensor_esp32/sensor_esp32.ino          ESP32 sensor kit: IMU 200 Hz + wheel notches + button, over USB
 ├── pipeline/                      Python on the laptop
 │   ├── requirements.txt
-│   ├── rig_driver.py              CLI: ports / spin / calibrate / compile / run / watch
+│   ├── rig_driver.py              CLI: ports / spin / trim / calibrate / compile / run / watch / process
 │   └── rig/
 │       ├── course.py              geometry (mirrors web/lib/course.ts)
 │       ├── compiler.py            course -> 50 Hz servo timeline + answer key
+│       ├── sensor.py              records the ESP32 during a run (and a fake sensor for testing)
+│       ├── process.py             sensor log -> detections (cracks, curbs, slopes, rough), path
+│       ├── score.py               detections vs the answer key -> results.json
 │       ├── calibration.py         wheel speed <-> pulse width
 │       ├── calibrate.py           measures the wheel servos with the ESP32
 │       ├── protocol.py            serial message format
@@ -108,7 +111,19 @@ npm run dev            # http://localhost:3000/sim
 cd web && npm run dev                                  # terminal 1
 cd pipeline && python rig_driver.py watch --port COM3   # terminal 2
 ```
-Draw a path, drag objects onto it, press **Run on rig**. No rig yet? `watch --fake --speedup 20`.
+Draw a path, drag objects onto it, press **Run on rig**. No rig yet? `watch --fake --speedup 20`
+(the fake rig also fakes the sensor kit, so you get results too).
+
+**With the sensor kit:** upload `firmware/sensor_esp32` to the ESP32 and add its port:
+`python rig_driver.py watch --port COM6 --esp-port COM7`. The driver records the ESP32 during
+each run, then processes and scores it; the run panel on `/sim` shows what was found, missed or
+falsely detected, the tilt felt over time, and the path measured from the wheels and gyro.
+Files land in `data/runs/run-<id>/` (`imu.csv`, `wheels.csv`, `results.json`); re-analyse one
+with `python rig_driver.py process ../data/runs/run-<id>`.
+
+The analysis works out the IMU's axes itself: "up" from gravity during the 5 s standstill (which
+also cancels any mounting tilt) and the tilt axis from the sync jolt at 5 s. Jolts are sized
+against the 10° sync jolt (small crack ~0.6×, large ~1.2×, curb ~1.8×).
 
 ## Course limits (the site checks these)
 

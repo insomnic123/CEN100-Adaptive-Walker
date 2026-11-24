@@ -144,3 +144,31 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
   .name-input { width: 100%; }
   .sim-body { padding: 12px 16px; }
 }
+
+/* ---- run results (sensor kit) */
+.results .score { font-size: 18px; margin: 10px 0 2px; }
+.results .tag { font-size: 11px; margin-left: 8px; padding: 1px 6px; border-radius: 6px; background: var(--surface-2); color: var(--muted); }
+.result-list { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 4px; }
+.result-list li { display: grid; grid-template-columns: 18px 1fr auto; gap: 2px 6px; align-items: baseline; font-size: 13px; }
+.result-list .icon { font-weight: 700; text-align: center; }
+.result-list .found .icon { color: var(--ok); }
+.result-list .missed .icon, .result-list .false-alarm .icon { color: var(--danger); }
+.result-list .wrong-type .icon { color: var(--warn); }
+.result-list .when { color: var(--muted); font-variant-numeric: tabular-nums; }
+.result-list .note { grid-column: 2 / 4; color: var(--muted); font-size: 12px; }
+.chart { width: 100%; height: auto; background: var(--surface-2); border-radius: 8px; display: block; }
+.chart .axis { stroke: var(--border); }
+.chart .tilt { fill: none; stroke: var(--text); stroke-width: 1.3; }
+.chart .shake { fill: none; stroke: var(--rough); stroke-width: 1; opacity: 0.8; }
+.chart .zone { opacity: 0.18; }
+.chart .zone.slope { fill: var(--slope); }
+.chart .zone.cross { fill: var(--cross); }
+.chart .zone.rough { fill: var(--rough); }
+.chart .zone.missed { opacity: 0.08; }
+.chart .mark { stroke-width: 1.5; }
+.chart .mark.crack { stroke: var(--crack); }
+.chart .mark.curb { stroke: var(--curb); }
+.chart .mark.missed { stroke-dasharray: 3 3; }
+.chart .course { fill: none; stroke: var(--muted); stroke-width: 2; }
+.chart .measured { fill: none; stroke: var(--rig); stroke-width: 1.6; stroke-dasharray: 3 2; }
+.chart .lbl { font-size: 9px; fill: var(--muted); }

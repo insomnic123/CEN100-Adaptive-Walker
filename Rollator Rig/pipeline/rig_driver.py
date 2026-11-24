@@ -8,6 +8,8 @@
   python rig_driver.py run ../data/courses/example.json --port COM3
   python rig_driver.py run ../data/courses/example.json --fake --speedup 20
   python rig_driver.py watch --port /dev/ttyACM0                run whatever the website queues
+  python rig_driver.py watch --port COM6 --esp-port COM7        ...and record + score the sensor kit
+  python rig_driver.py process ../data/runs/run-12              re-analyse a recorded run
 """
 from __future__ import annotations
 
@@ -101,6 +103,52 @@ def cmd_compile(args) -> int:
     return 1 if c.errors else 0
 
 
+def start_sensor(args, run_dir):
+    """Starts recording the ESP32 (if --esp-port), waiting until IMU data arrives."""
+    if not getattr(args, "esp_port", None):
+        return None
+    from rig.sensor import SensorRecorder
+    rec = SensorRecorder(args.esp_port, run_dir)
+    deadline = time.monotonic() + 4
+    while rec.imu_lines() < 20 and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if rec.imu_lines() < 20:
+        why = "; ".join(rec.problems) or "is sensor_esp32 uploaded, and is that the ESP32's port?"
+        print(f"  warning: no IMU data from the ESP32 ({why}); running without the sensor kit")
+    return rec
+
+
+def finish_sensor(args, rec, run_dir) -> str | None:
+    """Stops recording (or fakes the sensor log on the fake rig), then processes and scores."""
+    from rig.score import analyse_run, summary_line
+    if rec is not None:
+        time.sleep(0.5)                                  # catch the last samples
+        rec.stop()
+    elif getattr(args, "fake", False):
+        from rig.sensor import fake_sensor
+        fake_sensor(run_dir)
+    else:
+        return None
+    res = analyse_run(run_dir)
+    line = summary_line(res)
+    print(f"  sensor kit: {line}")
+    return line
+
+
+def cmd_process(args) -> int:
+    from rig.score import analyse_run, summary_line
+    res = analyse_run(args.run_dir)
+    print(summary_line(res))
+    for o in res.get("objects", []):
+        extra = f" ({o['note']})" if o.get("note") else ""
+        when = f"{o['timing_ms']:+d} ms" if o.get("timing_ms") is not None else ""
+        print(f"  {o['status']:<11} {o['label']:<22} {when}{extra}")
+    for f in res.get("false_alarms", []):
+        print(f"  false alarm  {f['kind']} at {f.get('t', f.get('t0'))} s")
+    print(f"written {Path(args.run_dir) / 'results.json'}")
+    return 0 if res.get("ok") else 1
+
+
 def cmd_run(args) -> int:
     c = compile_course(args.course)
     summarise(c)
@@ -108,15 +156,24 @@ def cmd_run(args) -> int:
         return 1
     run_dir = RUNS_DIR / datetime.now().strftime("cli-%Y%m%d-%H%M%S")
     link = open_port(args.port, args.fake, args.speedup)
+    rec = None
     try:
-        res = stream(link, c, run_dir, on_progress=lambda s: print(f"\r  progress {s:6.2f} m", end=""))
+        rec = start_sensor(args, run_dir)
+        res = stream(link, c, run_dir, on_progress=lambda s: print(f"\r  progress {s:6.2f} m", end=""),
+                     on_begin=rec.mark_begin if rec else None)
     except KeyboardInterrupt:
         link.write(b"X\n")
         print("\n  aborted")
+        if rec:
+            rec.stop()
         return 1
     finally:
         link.close()
     print(f"\n  {'aborted' if res['aborted'] else 'done'}; logs in {run_dir}")
+    if not res["aborted"] and (rec is not None or args.fake):
+        finish_sensor(args, rec, run_dir)
+    elif rec:
+        rec.stop()
     return 0
 
 
@@ -143,11 +200,25 @@ def cmd_watch(args) -> int:
             try:
                 if link is None:
                     link = open_port(args.port, args.fake, args.speedup)
-                res = stream(link, c, RUNS_DIR / f"run-{run_id}",
-                             on_progress=lambda s: db.set_run(con, run_id, progress_s=s),
-                             should_abort=lambda: db.abort_requested(con, run_id))
+                run_dir = RUNS_DIR / f"run-{run_id}"
+                rec = start_sensor(args, run_dir)
+                try:
+                    res = stream(link, c, run_dir,
+                                 on_progress=lambda s: db.set_run(con, run_id, progress_s=s),
+                                 should_abort=lambda: db.abort_requested(con, run_id),
+                                 on_begin=rec.mark_begin if rec else None)
+                except BaseException:
+                    if rec:
+                        rec.stop()
+                    raise
+                summary = None
+                if not res["aborted"] and (rec is not None or args.fake):
+                    db.set_run(con, run_id, message="processing the sensor data")
+                    summary = finish_sensor(args, rec, run_dir)
+                elif rec:
+                    rec.stop()
                 db.set_run(con, run_id, status="aborted" if res["aborted"] else "done",
-                           finished_at=datetime.now().isoformat(timespec="seconds"))
+                           message=summary, finished_at=datetime.now().isoformat(timespec="seconds"))
                 print(f"run {run_id}: {'aborted' if res['aborted'] else 'done'}")
             except (RigError, OSError) as e:
                 db.set_run(con, run_id, status="error", message=str(e),
@@ -248,17 +319,20 @@ def main() -> int:
     p.add_argument("--speedup", type=float, default=1.0)
     p = sub.add_parser("compile")
     p.add_argument("course", type=Path)
+    p = sub.add_parser("process")
+    p.add_argument("run_dir", type=Path)
     for name in ("run", "watch"):
         p = sub.add_parser(name)
         if name == "run":
             p.add_argument("course", type=Path)
+        p.add_argument("--esp-port", help="the ESP32 running firmware/sensor_esp32: record and score the run")
         p.add_argument("--port", help="e.g. COM3, /dev/ttyACM0, /dev/cu.usbmodem1101")
         p.add_argument("--fake", action="store_true", help="use the software rig instead of the Mega")
         p.add_argument("--speedup", type=float, default=1.0, help="fake rig only: run faster than real time")
     args = ap.parse_args()
     try:
         return {"ports": cmd_ports, "spin": cmd_spin, "trim": cmd_trim, "calibrate": cmd_calibrate,
-                "compile": cmd_compile,
+                "compile": cmd_compile, "process": cmd_process,
                 "run": cmd_run, "watch": cmd_watch}[args.cmd](args)
     except RigError as e:
         print(f"error: {e}")
