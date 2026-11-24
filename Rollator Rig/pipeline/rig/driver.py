@@ -22,7 +22,22 @@ def open_port(port: str | None, fake: bool = False, speedup: float = 1.0):
     import serial                                    # pyserial
     if not port:
         raise RigError("no serial port given (use --port, or --fake to test without hardware)")
-    return serial.Serial(port, BAUD, timeout=0.02)
+    try:
+        return serial.Serial(port, BAUD, timeout=0.02)
+    except serial.SerialException as e:
+        raise RigError(_port_hint(port, str(e))) from None
+
+
+def _port_hint(port: str, err: str) -> str:
+    """Turns pyserial's open errors into a plain explanation."""
+    from serial.tools import list_ports
+    found = ", ".join(p.device for p in list_ports.comports()) or "none"
+    if "denied" in err.lower() or "busy" in err.lower():
+        why = (f"{port} is in use by another program. Close the Arduino IDE's Serial Monitor tab "
+               f"(or the IDE), any VS Code serial monitor, and any other rig_driver.py window.")
+    else:
+        why = f"{port} doesn't exist right now. Is the Arduino plugged in, and is that the right port?"
+    return f"could not open {port}: {why}\n  ports seen: {found}"
 
 
 def _readline(link) -> str:
@@ -30,19 +45,38 @@ def _readline(link) -> str:
     return raw.decode(errors="replace").strip() if raw else ""
 
 
-def handshake(link, wait_s: float = 6.0) -> int:
-    """Opening the port resets the Arduino (about 2 s). Wait for READY, nudging with H."""
+def handshake(link, wait_s: float = 6.0, trims: dict | None = None) -> int:
+    """Opening the port resets the Arduino (about 2 s). Wait for READY, nudging with H,
+    then send the deck trims (data/deck.json unless given)."""
     deadline = time.monotonic() + wait_s
     next_nudge = time.monotonic() + 2.5
     while time.monotonic() < deadline:
         tag, val = parse(_readline(link))
         if tag == "READY":
+            send_trims(link, trims)
             return int(val)
         if time.monotonic() >= next_nudge:
             link.write(b"H\n")
             next_nudge = time.monotonic() + 1.0
     raise RigError("the Arduino never said READY: check the port, the baud rate (115200), "
                    "and that the Serial Monitor is closed")
+
+
+def send_trims(link, trims: dict | None = None) -> None:
+    """Sets the deck trims on the Arduino and waits for its OK (it re-centres the deck)."""
+    from . import deck
+    d = trims or deck.load()
+    link.write((deck.wire(d) + "\n").encode())
+    deadline = time.monotonic() + 1.5
+    while time.monotonic() < deadline:
+        tag, val = parse(_readline(link))
+        if tag == "OK":
+            return
+        if tag == "ERR":
+            print(f"  warning: the Arduino rejected the deck trims ({val}); re-upload the latest "
+                  "rig_bench.ino / rig_uno.ino")
+            return
+    print("  warning: no reply to the deck trims; re-upload the latest rig_bench.ino / rig_uno.ino")
 
 
 def stream(link, compiled: Compiled, run_dir: Path,

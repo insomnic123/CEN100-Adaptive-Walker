@@ -1,4 +1,4 @@
-"""Software stand-ins for the Arduino rig and the ESP32 hall counter (same serial protocols).
+"""Software stand-ins for the Arduino rig and the ESP32 wheel counter (same serial protocols).
 
     python rig_driver.py run ../data/courses/example.json --fake --speedup 20
     python rig_driver.py calibrate --fake
@@ -18,7 +18,7 @@ class FakeRig:
         self.speedup = speedup
         self.out: deque[bytes] = deque()
         self.buf = b""
-        self.wheels_us = (0, 0)                     # for FakeHallCounter during calibration
+        self.wheels_us = (0, 0)                     # for FakeWheelCounter during calibration
         self._reset()
         self.out.append(f"READY,{self.QUEUE}\n".encode())
 
@@ -72,6 +72,8 @@ class FakeRig:
         elif cmd == "X":
             self._reset()
             self.out.append(b"DONE,aborted\n")
+        elif cmd == "D":                             # deck trims: only matter on the real servos
+            self.out.append(b"OK\n")
         elif cmd == "C":
             _, l, r = line.split(",")
             self.wheels_us = (int(l), int(r))
@@ -96,8 +98,11 @@ class FakeRig:
                 return
 
 
-class FakeHallCounter:
-    """Pretends to be the ESP32 counting wheel magnets, using a slightly 'off' servo curve."""
+class FakeWheelCounter:
+    """Pretends to be the ESP32 counting wheel holes (photoresistors), with a slightly 'off'
+    servo curve, so calibration has something to find."""
+
+    HOLES = 4
 
     def __init__(self, rig: FakeRig, speedup: float = 1.0):
         self.rig = rig
@@ -105,6 +110,7 @@ class FakeHallCounter:
         self.t0 = time.monotonic()
         self.last = self.t0
         self.counts = [0.0, 0.0]
+        self.edges = [0, 0]                         # ms of each wheel's latest hole
         self.next = 0.0
 
     @staticmethod
@@ -124,14 +130,18 @@ class FakeHallCounter:
         dt = (now - self.last) * self.speedup
         self.last = now
         l_us, r_us = self.rig.wheels_us
-        self.counts[0] += self._rps(l_us, 1.06) * 8 * dt
-        self.counts[1] += self._rps(r_us, 0.95) * 8 * dt
         ms = (now - self.t0) * 1000 * self.speedup
+        for i, (us, scale) in enumerate(((l_us, 1.06), (r_us, 0.95))):
+            before = int(self.counts[i])
+            self.counts[i] += self._rps(us, scale) * self.HOLES * dt
+            if int(self.counts[i]) > before:
+                self.edges[i] = int(ms)
         if ms < self.next:
             time.sleep(0.01)
             return b""
         self.next = ms + 100
-        return f"H,{int(ms)},{int(self.counts[0])},{int(self.counts[1])}\n".encode()
+        return (f"H,{int(ms)},{int(self.counts[0])},{int(self.counts[1])},"
+                f"{self.edges[0]},{self.edges[1]}\n").encode()
 
     def close(self) -> None:
         pass

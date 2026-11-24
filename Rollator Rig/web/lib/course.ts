@@ -8,6 +8,22 @@ export const SERVO_LIMIT_DEG = 25;
 export const SETUP_S = 6; // standstill + sync tap before the wheels move
 export const CURB_PAUSE_S = 1;
 
+// Deck settings from data/deck.json (see pipeline/rig/deck.py), served by /api/rig.
+export type DeckSettings = {
+  yaw_trim: number;
+  yaw_sign: number;
+  wheel_max_rps?: number; // from data/calibration.json, once calibrated
+  wheel_min_rps?: number; // slowest speed the wheel servos hold smoothly
+};
+export const DEFAULT_DECK: DeckSettings = { yaw_trim: 0, yaw_sign: -1 };
+
+/** [most right, most left] heading change (degrees, left/CCW positive) the trimmed yaw servo can show. */
+export function yawRange(deck: DeckSettings): [number, number] {
+  const lo = -YAW_LIMIT_DEG - deck.yaw_trim;
+  const hi = YAW_LIMIT_DEG - deck.yaw_trim;
+  return deck.yaw_sign > 0 ? [lo, hi] : [-hi, -lo];
+}
+
 const dist = (a: Pt, b: Pt) => Math.hypot(b[0] - a[0], b[1] - a[1]);
 
 export function cumulative(path: Pt[]): number[] {
@@ -64,6 +80,24 @@ export function subpath(path: Pt[], s0: number, s1: number): Pt[] {
   return out;
 }
 
+/** [most right, most left] the path ever points from its first leg's direction (left/CCW positive). */
+export function headingRangeDeg(path: Pt[]): [number, number] {
+  let total = 0;
+  let lo = 0;
+  let hi = 0;
+  let prev: number | null = null;
+  for (let i = 1; i < path.length; i++) {
+    const h = Math.atan2(path[i][1] - path[i - 1][1], path[i][0] - path[i - 1][0]);
+    if (prev !== null) {
+      total += Math.atan2(Math.sin(h - prev), Math.cos(h - prev));
+      lo = Math.min(lo, total);
+      hi = Math.max(hi, total);
+    }
+    prev = h;
+  }
+  return [(lo * 180) / Math.PI, (hi * 180) / Math.PI];
+}
+
 /** Furthest the path ever points away from its first leg's direction. */
 export function maxHeadingDeg(path: Pt[]): number {
   let total = 0;
@@ -93,7 +127,7 @@ export function netTurnDeg(path: Pt[]): number {
 
 export type Check = { level: "error" | "warning" | "ok"; text: string };
 
-export function checkCourse(c: Course): { checks: Check[]; length: number; runTimeS: number; peakRps: number } {
+export function checkCourse(c: Course, deck: DeckSettings = DEFAULT_DECK): { checks: Check[]; length: number; runTimeS: number; peakRps: number } {
   const checks: Check[] = [];
   const length = pathLength(c.path);
   const v = c.walker.speed_mps / c.rig.time_scale;
@@ -105,19 +139,36 @@ export function checkCourse(c: Course): { checks: Check[]; length: number; runTi
   const peakRps = peakV / c.walker.wheel_circ_m;
 
   if (c.path.length < 2) checks.push({ level: "error", text: "Draw a path with at least two points." });
-  if (peakRps > WHEEL_MAX_RPS) {
-    const k = (c.rig.time_scale * peakRps) / WHEEL_MAX_RPS;
+  const maxRps = deck.wheel_max_rps ?? WHEEL_MAX_RPS;
+  if (peakRps > maxRps) {
+    const k = (c.rig.time_scale * peakRps) / maxRps;
     checks.push({
       level: "error",
-      text: `Wheels would need ${peakRps.toFixed(2)} turns/s in corners (servo limit about ${WHEEL_MAX_RPS}). Raise the time scale to at least ${Math.ceil(k * 10) / 10}, or increase the corner radius.`,
+      text: `Wheels would need ${peakRps.toFixed(2)} turns/s in corners (${deck.wheel_max_rps ? "calibrated" : "servo"} limit about ${maxRps.toFixed(2)}). Raise the time scale to at least ${Math.ceil(k * 10) / 10}, or increase the corner radius.`,
     });
   }
-  const reach = maxHeadingDeg(c.path);
-  if (reach > YAW_LIMIT_DEG + 0.5)
+  const lowRps = turns ? Math.max(0, v * (1 - c.walker.track_m / (2 * r))) / c.walker.wheel_circ_m : peakRps;
+  if (deck.wheel_min_rps && turns && lowRps < deck.wheel_min_rps - 0.01)
+    checks.push({
+      level: "warning",
+      text: `The inner wheel needs ${lowRps.toFixed(2)} turns/s in corners, below the slowest your servos run smoothly (${deck.wheel_min_rps.toFixed(2)}), so it will stutter or stop there. Increase the corner radius.`,
+    });
+  // Only heading changes matter to the IMU: if the turns don't fit one side of the (trimmed) yaw servo,
+  // the compiler starts the deck turned the other way. Mirrors pipeline/rig/compiler.py.
+  const [needLo, needHi] = headingRangeDeg(c.path);
+  const [canLo, canHi] = yawRange(deck);
+  const yawStart = needHi > canHi ? canHi - needHi : needLo < canLo ? canLo - needLo : 0;
+  if (needHi - needLo > canHi - canLo + 0.5) {
     checks.push({
       level: "error",
-      text: `The path points up to ${Math.round(reach)}° away from its first leg; the yaw servo covers ±${YAW_LIMIT_DEG}°. Keep every leg within ±${YAW_LIMIT_DEG}° of the first one (a right turn needs a left turn before another right).`,
+      text: `The path turns through ${Math.round(needHi - needLo)}° in total (${Math.round(needHi)}° left and ${Math.round(-needLo)}° right of its first leg); the yaw servo covers ${Math.round(canHi - canLo)}°. Keep the legs within that (a right turn needs a left turn before another right).`,
     });
+  } else if (Math.abs(yawStart) > 0.5) {
+    checks.push({
+      level: "warning",
+      text: `The deck will start turned ${Math.round(Math.abs(yawStart))}° ${yawStart > 0 ? "left" : "right"} so the turns fit the trimmed yaw servo (data/deck.json). That's fine: headings are measured from the start.`,
+    });
+  }
   for (const o of c.objects) {
     if (o.type === "slope" || o.type === "cross") {
       const pct = o.type === "slope" ? o.grade_pct : o.tilt_pct;
@@ -148,8 +199,8 @@ export function objectLabel(o: CourseObject): string {
 export const EXAMPLE_COURSE: Course = {
   name: "L-loop with curb",
   walker: { speed_mps: 0.8, wheel_circ_m: 0.64, track_m: 0.5 },
-  rig: { time_scale: 2 },
-  corner_radius_m: 0.5,
+  rig: { time_scale: 2.5 },
+  corner_radius_m: 1.0,
   path: [[3, 3], [3, 11], [13, 11], [13, 20], [24, 20]],
   objects: [
     { id: "c1", type: "crack", s: 4.0, severity: "large" },

@@ -1,7 +1,7 @@
 """Wheel-servo calibration: which pulse width gives which wheel speed.
 
 Continuous servos are told a speed, not a distance, and every unit is a little different.
-`rig_driver.py calibrate` measures each wheel with the ESP32's Hall sensors and writes
+`rig_driver.py calibrate` measures each wheel with the ESP32's photoresistor counters and writes
 data/calibration.json. Until then, a typical FS90R curve is used (expect a few % error).
 """
 from __future__ import annotations
@@ -37,6 +37,11 @@ def save(cal: dict, path: Path = CAL_PATH) -> None:
 
 def max_rps(cal: dict) -> float:
     return min(cal["left"]["table"][-1][1], cal["right"]["table"][-1][1])
+
+
+def min_smooth_rps(cal: dict) -> float:
+    """Slowest speed both wheels can hold: below it a servo jumps between stopped and this speed."""
+    return max(min((r for _, r in cal[side]["table"] if r > 0), default=0.0) for side in ("left", "right"))
 
 
 def pulse_for(side: dict, rps: float) -> int:

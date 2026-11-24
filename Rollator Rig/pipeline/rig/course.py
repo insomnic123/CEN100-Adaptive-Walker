@@ -136,6 +136,17 @@ class Course:
             prev = h
         return math.degrees(worst)
 
+    def heading_range_deg(self) -> tuple[float, float]:
+        """(most right, most left) the path ever points from its starting direction (CCW positive)."""
+        total, prev, lo, hi = 0.0, None, 0.0, 0.0
+        for a, b in zip(self.path.pts, self.path.pts[1:]):
+            h = math.atan2(b[1] - a[1], b[0] - a[0])
+            if prev is not None:
+                total += math.atan2(math.sin(h - prev), math.cos(h - prev))
+                lo, hi = min(lo, total), max(hi, total)
+            prev = h
+        return math.degrees(lo), math.degrees(hi)
+
     def net_turn_deg(self) -> float:
         total, prev = 0.0, None
         for a, b in zip(self.path.pts, self.path.pts[1:]):

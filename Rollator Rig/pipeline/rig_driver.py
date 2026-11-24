@@ -2,6 +2,7 @@
 
   python rig_driver.py ports                                   list serial ports
   python rig_driver.py spin --port COM3 --left 1600             check a wheel's direction (3 s)
+  python rig_driver.py trim --port COM3                         straighten and level the deck at rest
   python rig_driver.py calibrate --port COM3 --esp-port COM5    measure the wheel servos once
   python rig_driver.py compile ../data/courses/example.json     check a course, no hardware
   python rig_driver.py run ../data/courses/example.json --port COM3
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from rig import calibration, db
 from rig.compiler import compile_course
-from rig.driver import RigError, handshake, open_port, stream
+from rig.driver import RigError, handshake, open_port, send_trims, stream
 
 RUNS_DIR = db.ROOT / "data" / "runs"
 
@@ -61,21 +62,22 @@ def cmd_spin(args) -> int:
         time.sleep(0.2)
     finally:
         link.close()
-    print("Each wheel should roll forward (the way the rig 'walks'). If one went backwards,\n"
-          "calibrate with --invert-left or --invert-right for that wheel.")
+    print("Each wheel should roll forward (the way the rig 'walks'). If one went backwards:\n"
+          "  rig_bench.ino: flip INVERT_LEFT / INVERT_RIGHT in the sketch and re-upload.\n"
+          "  rig_uno.ino:   calibrate with --invert-left / --invert-right for that wheel.")
     return 0
 
 
 def cmd_calibrate(args) -> int:
     from rig import calibrate
     if args.fake:
-        from rig.fake_rig import FakeHallCounter, FakeRig
+        from rig.fake_rig import FakeRig, FakeWheelCounter
         rig = FakeRig(speedup=args.speedup)
-        esp = FakeHallCounter(rig, speedup=args.speedup)
+        esp = FakeWheelCounter(rig, speedup=args.speedup)
     else:
         import serial
         if not args.port or not args.esp_port:
-            print("need --port (Arduino) and --esp-port (ESP32 running hall_counter_esp32)")
+            print("need --port (Arduino) and --esp-port (ESP32 running photo_counter_esp32)")
             return 1
         rig = serial.Serial(args.port, 115200, timeout=0.05)
         esp = serial.Serial(args.esp_port, 115200, timeout=0.2)
@@ -162,6 +164,68 @@ def cmd_watch(args) -> int:
     return 0
 
 
+TRIM_HELP = """Adjust until the deck faces straight forward and sits level:
+  y+ / y-     nudge yaw by 2 degrees        y 35    set yaw trim to 35
+  p+ / p-     nudge pitch by 2 degrees      p -30   set pitch trim to -30
+  r+ / r-     nudge roll by 2 degrees       r 0     set roll trim to 0
+  flip        reverse the yaw direction (if the deck turns the wrong way in corners)
+  save        write data/deck.json          q       quit"""
+
+
+def cmd_trim(args) -> int:
+    from rig import deck
+    d = deck.load()
+    link = open_port(args.port, args.fake)
+    saved = dict(d)
+    try:
+        handshake(link, trims=d)
+        print(TRIM_HELP)
+        keys = {"y": "yaw_trim", "p": "pitch_trim", "r": "roll_trim"}
+        while True:
+            try:
+                cmd = input(f"yaw {d['yaw_trim']:+d}  pitch {d['pitch_trim']:+d}  roll {d['roll_trim']:+d}"
+                            f"  (yaw direction {d['yaw_sign']:+d}) > ").strip().lower()
+            except EOFError:
+                cmd = "q"
+            if cmd in ("q", "quit", "exit"):
+                if d != saved and input("save changes to data/deck.json? [y/n] ").strip().lower() == "y":
+                    deck.save(d)
+                    print(f"saved {deck.DECK_PATH}")
+                break
+            if cmd == "save":
+                deck.save(d)
+                saved = dict(d)
+                print(f"saved {deck.DECK_PATH}")
+                continue
+            if cmd == "flip":
+                d["yaw_sign"] = -d["yaw_sign"]
+                print("yaw direction flipped (used by the compiler; the deck doesn't move now)")
+                continue
+            key = keys.get(cmd[:1]) if cmd else None
+            rest = cmd[1:].replace("aw", "", 1).replace("itch", "", 1).replace("oll", "", 1).strip()
+            if key and rest in ("+", "-"):
+                d[key] += 2 if rest == "+" else -2
+            elif key:
+                try:
+                    d[key] = int(rest)
+                except ValueError:
+                    print(TRIM_HELP)
+                    continue
+            else:
+                print(TRIM_HELP)
+                continue
+            if abs(d[key]) > deck.TRIM_LIMIT:
+                d[key] = max(-deck.TRIM_LIMIT, min(deck.TRIM_LIMIT, d[key]))
+                print(f"  capped at ±{deck.TRIM_LIMIT}; beyond that, re-seat the servo horn")
+            send_trims(link, d)
+        lo, hi = deck.heading_range(d)
+        print(f"the deck can now turn {max(hi, 0):.0f} degrees left and {max(-lo, 0):.0f} right "
+              "of the starting direction")
+    finally:
+        link.close()
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -172,9 +236,12 @@ def main() -> int:
     p.add_argument("--right", type=int, default=1600)
     p.add_argument("--seconds", type=float, default=3)
     p.add_argument("--fake", action="store_true")
+    p = sub.add_parser("trim")
+    p.add_argument("--port")
+    p.add_argument("--fake", action="store_true")
     p = sub.add_parser("calibrate")
     p.add_argument("--port", help="the Arduino")
-    p.add_argument("--esp-port", help="the ESP32 running firmware/hall_counter_esp32")
+    p.add_argument("--esp-port", help="the ESP32 running firmware/photo_counter_esp32")
     p.add_argument("--invert-left", action="store_true")
     p.add_argument("--invert-right", action="store_true")
     p.add_argument("--fake", action="store_true")
@@ -189,8 +256,13 @@ def main() -> int:
         p.add_argument("--fake", action="store_true", help="use the software rig instead of the Mega")
         p.add_argument("--speedup", type=float, default=1.0, help="fake rig only: run faster than real time")
     args = ap.parse_args()
-    return {"ports": cmd_ports, "spin": cmd_spin, "calibrate": cmd_calibrate, "compile": cmd_compile,
-            "run": cmd_run, "watch": cmd_watch}[args.cmd](args)
+    try:
+        return {"ports": cmd_ports, "spin": cmd_spin, "trim": cmd_trim, "calibrate": cmd_calibrate,
+                "compile": cmd_compile,
+                "run": cmd_run, "watch": cmd_watch}[args.cmd](args)
+    except RigError as e:
+        print(f"error: {e}")
+        return 1
 
 
 if __name__ == "__main__":

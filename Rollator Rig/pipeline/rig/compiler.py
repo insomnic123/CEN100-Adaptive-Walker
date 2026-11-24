@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, asdict
 
-from . import calibration
+from . import calibration, deck as deck_settings
 from .course import Course
 
 TICK_S = 0.02                 # 50 Hz timeline
@@ -23,7 +23,7 @@ MOVE_AT_S = 6.0               # wheels start
 SERVO_CENTRE = 90
 TILT_LIMIT = 25               # pitch / roll servo travel either way, degrees
 YAW_LIMIT = 90                # yaw servo: 0-180 degrees = heading -90 .. +90
-YAW_SIGN = -1                 # flip if the deck turns the wrong way (servo 90 + YAW_SIGN * heading)
+# yaw direction and deck trims live in data/deck.json (see rig/deck.py)
 
 CURB_PAUSE_S = 1.0
 CURB_NOD_DEG = 12.0
@@ -104,10 +104,24 @@ def compile_course(src, cal: dict | None = None) -> Compiled:
             warnings.append(f"unknown object type '{t}' ignored")
     point_events.sort(key=lambda e: e["route_s"])
 
-    reach = course.max_abs_heading_deg()
-    if reach > YAW_LIMIT:
-        errors.append(f"the path turns up to {reach:.0f} degrees away from its starting direction; the yaw "
-                      f"servo covers ±{YAW_LIMIT}. Keep every leg within ±{YAW_LIMIT} degrees of the first one")
+    deck = deck_settings.load()
+    yaw_sign = deck["yaw_sign"]
+    can_lo, can_hi = deck_settings.heading_range(deck)      # what the yaw servo can show
+    need_lo, need_hi = course.heading_range_deg()
+    # Only heading *changes* matter to the IMU, so if the turns don't fit one side of the (trimmed)
+    # yaw servo, start the deck turned the other way: yaw_start is added to every heading.
+    yaw_start = 0.0
+    if need_hi > can_hi:
+        yaw_start = can_hi - need_hi
+    elif need_lo < can_lo:
+        yaw_start = can_lo - need_lo
+    if need_hi - need_lo > can_hi - can_lo + 0.5:
+        errors.append(f"the path turns through {need_hi - need_lo:.0f} degrees in total ({need_hi:.0f} left "
+                      f"and {-need_lo:.0f} right of its first leg); the yaw servo covers "
+                      f"{can_hi - can_lo:.0f}. Keep the legs within that")
+    elif abs(yaw_start) > 0.5:
+        warnings.append(f"the deck starts turned {abs(yaw_start):.0f} degrees {'left' if yaw_start > 0 else 'right'} "
+                        f"so the turns fit the trimmed yaw servo (headings are measured from the start)")
 
     def tilt(s: float, kind: str, key: str) -> float:
         deg = 0.0
@@ -121,6 +135,14 @@ def compile_course(src, cal: dict | None = None) -> Compiled:
             if z["type"] == "rough" and z["r0"] <= s <= z["r1"]:
                 return BUZZ.get(z.get("level", "light"), 1)
         return 0
+
+    def yaw_servo(heading_deg: float) -> int:
+        # untrimmed servo angle (the Arduino adds the trim); clipped so trimmed stays in 0..180
+        heading_deg += yaw_start
+        clipped = max(can_lo, min(can_hi, heading_deg))
+        if abs(clipped - heading_deg) > 0.5:
+            warnings.append("yaw clipped where the path turns further than the trimmed yaw servo reaches")
+        return int(round(SERVO_CENTRE + yaw_sign * clipped))
 
     def servo(deg: float, label: str, limit: float = TILT_LIMIT) -> int:
         if abs(deg) > limit + 1e-9:
@@ -137,7 +159,9 @@ def compile_course(src, cal: dict | None = None) -> Compiled:
     next_event = 0
     curb_left = 0.0
     peak_rps = 0.0
+    low_rps = math.inf                             # slowest moving wheel (the inner one in corners)
     top_rps = calibration.max_rps(cal)
+    smooth_rps = calibration.min_smooth_rps(cal)
 
     def smooth_heading(at: float, half: float = 0.1) -> float:
         a = route.point_at(max(0.0, at - half))
@@ -147,13 +171,15 @@ def compile_course(src, cal: dict | None = None) -> Compiled:
     prev_h = smooth_heading(0.0)
 
     def emit(l_rps: float, r_rps: float, pitch_extra: float = 0.0, jolt: int = JOLT_NONE) -> None:
-        nonlocal peak_rps
+        nonlocal peak_rps, low_rps
         peak_rps = max(peak_rps, l_rps, r_rps)
+        if l_rps > 0.005 and r_rps > 0.005:
+            low_rps = min(low_rps, l_rps, r_rps)
         lines.append(Line(
             t_ms=int(round(t * 1000)),
             left_us=calibration.pulse_for(cal["left"], l_rps),
             right_us=calibration.pulse_for(cal["right"], r_rps),
-            yaw_deg=servo(YAW_SIGN * math.degrees(yaw), "yaw", YAW_LIMIT),
+            yaw_deg=yaw_servo(math.degrees(yaw)),
             pitch_deg=servo(tilt(s, "slope", "grade_pct") + pitch_extra, "pitch"),
             roll_deg=servo(tilt(s, "cross", "tilt_pct"), "roll"),
             jolt=jolt, buzz=buzz(s) if curb_left <= 0 else 0, s=round(s, 3)))
@@ -202,6 +228,10 @@ def compile_course(src, cal: dict | None = None) -> Compiled:
     if peak_rps > top_rps:
         errors.append(f"wheels would need {peak_rps:.2f} turns/s but the servos top out near {top_rps:.2f}; "
                       f"raise rig.time_scale above {k * peak_rps / top_rps:.1f} or widen the corners")
+    if low_rps < smooth_rps - 0.01:
+        warnings.append(f"the inner wheel needs {low_rps:.2f} turns/s in corners, below the slowest the "
+                        f"servos run smoothly ({smooth_rps:.2f}), so it will stutter or stop there; "
+                        f"widen the corners (corner_radius_m)")
 
     for o in truth_objects:
         if o.get("id") in times:
@@ -213,6 +243,7 @@ def compile_course(src, cal: dict | None = None) -> Compiled:
         "tick_s": TICK_S,
         "sync_jolt_s": SYNC_AT_S,
         "move_s": MOVE_AT_S,
+        "yaw_start_deg": round(yaw_start, 1),       # deck's starting turn (left positive), see above
         "wheel_calibrated": bool(cal.get("measured")),
         "peak_wheel_rps": round(peak_rps, 3),
         "objects": truth_objects,

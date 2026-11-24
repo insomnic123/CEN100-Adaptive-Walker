@@ -7,7 +7,7 @@
 //   D10 deck pitch   standard servo: slopes, curb lift, and the crack/curb jolts
 //   D11 deck roll    standard servo, optional: cross-slope
 // No sensors on this board. Wheel speeds come from data/calibration.json on the laptop,
-// measured once with the ESP32's own Hall sensors (rig_driver.py calibrate).
+// measured once with the ESP32's photoresistor wheel counters (rig_driver.py calibrate).
 //
 // Receives a 50 Hz timeline from pipeline/rig_driver.py over USB serial (115200 baud).
 // Protocol: see pipeline/rig/protocol.py.  Libraries: Servo (built in).
@@ -30,6 +30,13 @@ const uint8_t QUEUE_SIZE = 24;
 // ---------------------------------------------------------------- tuning
 const uint8_t SERVO_CENTRE = 90;
 const int8_t JOLT_DIR = 1;          // flip to -1 if jolts tilt the deck the wrong way
+// Deck trims, in servo degrees: added to every deck angle so the deck rests straight and level.
+// Normally leave these at 0: set them live with `python rig_driver.py trim --port COMx`, which
+// saves data/deck.json, and the laptop sends them (D command) every time it connects.
+const int8_t YAW_TRIM_DEG = 0;
+const int8_t PITCH_TRIM_DEG = 0;
+const int8_t ROLL_TRIM_DEG = 0;
+int8_t yawTrim = YAW_TRIM_DEG, pitchTrim = PITCH_TRIM_DEG, rollTrim = ROLL_TRIM_DEG;
 const uint16_t JOLT_MS = 70;        // how long the deck stays flicked before snapping back
 const uint16_t BUZZ_HALF_MS = 80;   // rough patch: about 6 flicks per second
 
@@ -84,16 +91,19 @@ void stopWheels() {
 }
 
 void writePitch(int angle) {
-  angle = constrain(angle, 0, 180);
+  angle = constrain(angle + pitchTrim, 0, 180);
   if (angle != lastPitchWritten) {
     pitchServo.write(angle);
     lastPitchWritten = angle;
   }
 }
 
+void writeYaw(int angle) { yawServo.write(constrain(angle + yawTrim, 0, 180)); }
+void writeRoll(int angle) { rollServo.write(constrain(angle + rollTrim, 0, 180)); }
+
 void centreDeck() {
-  yawServo.write(SERVO_CENTRE);
-  rollServo.write(SERVO_CENTRE);
+  writeYaw(SERVO_CENTRE);
+  writeRoll(SERVO_CENTRE);
   pitchBase = SERVO_CENTRE;
   buzzLevel = 0;
   joltUntil = 0;
@@ -145,8 +155,8 @@ void updatePitch(uint32_t now) {
 void apply(const Cmd &c, uint32_t now) {
   if (c.left != cur.left) driveWheel(wheelL, PIN_WHEEL_L, c.left);
   if (c.right != cur.right) driveWheel(wheelR, PIN_WHEEL_R, c.right);
-  if (c.yaw != cur.yaw) yawServo.write(c.yaw);
-  if (c.roll != cur.roll) rollServo.write(c.roll);
+  if (c.yaw != cur.yaw) writeYaw(c.yaw);
+  if (c.roll != cur.roll) writeRoll(c.roll);
   pitchBase = c.pitch;
   buzzLevel = c.buzz;
   if (c.jolt) {
@@ -197,7 +207,7 @@ void sendReady() {
 }
 
 void handleLine(char *s, uint32_t now) {
-  long v[2];
+  long v[3];
   switch (s[0]) {
     case 'T':
       if (!parseT(s)) Serial.println(F("ERR,bad T line"));
@@ -223,6 +233,18 @@ void handleLine(char *s, uint32_t now) {
       centreDeck();
       state = IDLE;
       sendReady();
+      break;
+    case 'D':  // deck trims: D,yaw,pitch,roll in degrees (idle only); re-centres the deck
+      if (state == IDLE && parseInts(s, v, 3) == 3) {
+        yawTrim = (int8_t)constrain(v[0], -90, 90);
+        pitchTrim = (int8_t)constrain(v[1], -90, 90);
+        rollTrim = (int8_t)constrain(v[2], -90, 90);
+        lastPitchWritten = -1;
+        centreDeck();
+        Serial.println(F("OK"));
+      } else {
+        Serial.println(F("ERR,D only works while idle"));
+      }
       break;
     case 'C':  // calibration: C,left_us,right_us drives the wheels directly (0 = stop)
       if (state == IDLE && parseInts(s, v, 2) == 2) {

@@ -1,7 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { checkCourse, EMPTY_COURSE, EXAMPLE_COURSE, objectLabel, pathLength } from "@/lib/course";
+import { checkCourse, DEFAULT_DECK, EMPTY_COURSE, EXAMPLE_COURSE, objectLabel, pathLength } from "@/lib/course";
+import type { DeckSettings } from "@/lib/course";
 import type { Course, CourseObject, ObjectType, Pt, Run } from "@/lib/types";
 import { isZone } from "@/lib/types";
 import Plane, { type DragNew, type Mode, type PlaneApi } from "./Plane";
@@ -41,7 +42,19 @@ export default function SimEditor() {
   const planeApi = useRef<PlaneApi | null>(null);
 
   const length = pathLength(course.path);
-  const { checks, runTimeS, peakRps } = useMemo(() => checkCourse(course), [course]);
+  const [deck, setDeck] = useState<DeckSettings>(DEFAULT_DECK);
+  // deck trims (data/deck.json) change how far the yaw servo can turn; re-read when the tab regains focus
+  useEffect(() => {
+    const load = () =>
+      fetch("/api/rig")
+        .then((r) => (r.ok ? r.json() : null))
+        .then((d: DeckSettings | null) => d && setDeck(d))
+        .catch(() => {});
+    load();
+    window.addEventListener("focus", load);
+    return () => window.removeEventListener("focus", load);
+  }, []);
+  const { checks, runTimeS, peakRps } = useMemo(() => checkCourse(course, deck), [course, deck]);
   const hasError = checks.some((c) => c.level === "error");
   const selected = course.objects.find((o) => o.id === selectedId) ?? null;
   const live = run !== null && !FINISHED.includes(run.status);

@@ -8,16 +8,21 @@ Laptop -> Arduino
   E                                  end of stream: finish the queue, centre the deck, DONE
   X                                  abort now: stop wheels, centre the deck, DONE,aborted
   C,left_us,right_us                 calibration only: drive the wheels directly (0 = stop); answers OK
+  D,yaw_trim,pitch_trim,roll_trim    deck trims in degrees (data/deck.json), idle only; re-centres the
+                                     deck and answers OK. The driver sends it after every READY.
 
 Arduino -> laptop
   READY,<queue_size>                 after boot and after H
   P,t,executed,queued                progress, every 50 ms while running
   DONE[,aborted]                     finished; wheels stopped and the deck centred
-  OK                                 reply to C
+  OK                                 reply to C and D
   ERR,<message>                      bad line, queue overflow, or starved (queue ran dry)
 
-ESP32 hall counter (calibration only, its own USB port)
-  H,ms,left_count,right_count        every 100 ms
+ESP32 photoresistor wheel counter (calibration only, its own USB port; 4 holes per wheel)
+  H,ms,left_count,right_count,left_edge_ms,right_edge_ms
+                                     every 100 ms; *_edge_ms = ESP32 time of that wheel's latest hole
+  L,left_level,right_level,left_threshold,right_threshold
+                                     optional (SHOW_LEVELS), light readings for setting up; ignored
 """
 from __future__ import annotations
 
