@@ -179,6 +179,9 @@ def cmd_run(args) -> int:
 
 def cmd_watch(args) -> int:
     con = db.connect()
+    stale = db.fail_stale_runs(con)
+    if stale:
+        print(f"marked {stale} run(s) left 'running' by an earlier watcher as errors")
     print("watching for runs queued by the website (Ctrl+C to stop)")
     link = None
     try:
@@ -204,7 +207,7 @@ def cmd_watch(args) -> int:
                 rec = start_sensor(args, run_dir)
                 try:
                     res = stream(link, c, run_dir,
-                                 on_progress=lambda s: db.set_run(con, run_id, progress_s=s),
+                                 on_progress=lambda s: db.set_run(con, run_id, progress_s=s, best_effort=True),
                                  should_abort=lambda: db.abort_requested(con, run_id),
                                  on_begin=rec.mark_begin if rec else None)
                 except BaseException:
@@ -220,11 +223,21 @@ def cmd_watch(args) -> int:
                 db.set_run(con, run_id, status="aborted" if res["aborted"] else "done",
                            message=summary, finished_at=datetime.now().isoformat(timespec="seconds"))
                 print(f"run {run_id}: {'aborted' if res['aborted'] else 'done'}")
-            except (RigError, OSError) as e:
-                db.set_run(con, run_id, status="error", message=str(e),
-                           finished_at=datetime.now().isoformat(timespec="seconds"))
-                print(f"run {run_id}: error: {e}")
+            except KeyboardInterrupt:
+                raise
+            except Exception as e:                       # anything else: fail this run, keep watching
+                msg = str(e) if isinstance(e, (RigError, OSError)) else f"{type(e).__name__}: {e}"
+                try:
+                    db.set_run(con, run_id, status="error", message=msg,
+                               finished_at=datetime.now().isoformat(timespec="seconds"))
+                except Exception:
+                    pass
+                print(f"run {run_id}: error: {msg}")
                 if link is not None:
+                    try:
+                        link.write(b"X\n")                 # stop the rig if it's still playing
+                    except Exception:
+                        pass
                     link.close()
                     link = None
     except KeyboardInterrupt:

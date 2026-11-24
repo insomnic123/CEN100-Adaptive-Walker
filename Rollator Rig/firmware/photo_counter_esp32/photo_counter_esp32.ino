@@ -105,11 +105,11 @@ void loop() {
   }
 
   uint32_t now = millis();
-  // if ((int32_t)(now - nextReport) >= 0) {
-  //   nextReport = now + 100;
-  //   Serial.printf("H,%lu,%lu,%lu,%lu,%lu\n", (unsigned long)now, (unsigned long)left.count,
-  //                 (unsigned long)right.count, (unsigned long)left.edgeMs, (unsigned long)right.edgeMs);
-  //   if (SHOW_LEVELS)
-  //     Serial.printf("L,%d,%d,%d,%d\n", left.level, right.level, left.threshold(), right.threshold());
+  if ((int32_t)(now - nextReport) >= 0) {
+    nextReport = now + 100;
+    Serial.printf("H,%lu,%lu,%lu,%lu,%lu\n", (unsigned long)now, (unsigned long)left.count,
+                  (unsigned long)right.count, (unsigned long)left.edgeMs, (unsigned long)right.edgeMs);
+    if (SHOW_LEVELS)
+      Serial.printf("L,%d,%d,%d,%d\n", left.level, right.level, left.threshold(), right.threshold());
   }
 }
