@@ -48,9 +48,9 @@ struct Cmd {
   uint32_t t;      // ms since B
   uint16_t left;   // wheel pulse width in us, 0 = stop (detached)
   uint16_t right;
-  uint8_t yaw;     // servo degrees
-  uint8_t pitch;
-  uint8_t roll;
+  int16_t yaw;     // servo degrees before the deck trim (may run past 0..180; clamped after trimming)
+  int16_t pitch;
+  int16_t roll;
   uint8_t jolt;    // 0 none, 1 small crack, 2 large crack, 3 curb drop, 4 sync
   uint8_t buzz;    // 0 off, 1 light, 2 heavy
 };
@@ -64,7 +64,7 @@ bool ending = false, aborted = false, starvedReported = false;
 uint32_t t0 = 0, executed = 0, lastReport = 0, returnUntil = 0;
 
 // pitch = commanded angle + jolt/buzz offset
-uint8_t pitchBase = SERVO_CENTRE;
+int16_t pitchBase = SERVO_CENTRE;
 uint32_t joltUntil = 0;
 uint8_t joltAmp = 0;
 uint8_t buzzLevel = 0;
@@ -192,9 +192,9 @@ bool parseT(char *s) {
   c.t = (uint32_t)v[0];
   c.left = (uint16_t)constrain(v[1], 0, 2500);
   c.right = (uint16_t)constrain(v[2], 0, 2500);
-  c.yaw = (uint8_t)constrain(v[3], 0, 180);
-  c.pitch = (uint8_t)constrain(v[4], 0, 180);
-  c.roll = (uint8_t)constrain(v[5], 0, 180);
+  c.yaw = (int16_t)constrain(v[3], -90, 270);   // the trim is added, then 0..180 enforced, when written
+  c.pitch = (int16_t)constrain(v[4], -90, 270);
+  c.roll = (int16_t)constrain(v[5], -90, 270);
   c.jolt = (uint8_t)v[6];
   c.buzz = (uint8_t)v[7];
   qCount++;

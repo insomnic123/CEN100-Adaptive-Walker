@@ -69,6 +69,11 @@ def score(analysis: dict, truth: dict, timeline: list[dict]) -> dict:
         else:
             t0, t1 = _zone_times(timeline, o["route_s0"], o["route_s1"])
             row["t0"], row["t1"] = round(t0, 2), round(t1, 2)
+            if o["type"] == "cross" and not truth.get("has_roll_servo"):
+                row["status"] = "not tested"
+                row["note"] = "needs the roll servo on D11"
+                objects.append(row)
+                continue
             kind = {"slope": "slope", "cross": "cross", "rough": "rough"}[o["type"]]
             best, best_ov = None, 0.0
             for d in dets:
@@ -79,8 +84,6 @@ def score(analysis: dict, truth: dict, timeline: list[dict]) -> dict:
                     best, best_ov = d, ov
             if best is None or best_ov < ZONE_OVERLAP:
                 row["status"] = "missed"
-                if o["type"] == "cross":
-                    row["note"] = "cross-slopes need the roll servo on D11"
             else:
                 best["used"] = True
                 row["status"] = "found"
@@ -97,11 +100,12 @@ def score(analysis: dict, truth: dict, timeline: list[dict]) -> dict:
         objects.append(row)
     false_alarms = [{k: v for k, v in d.items() if k != "used"} for d in dets if not d["used"]]
     found = sum(r["status"] == "found" for r in objects)
+    tested = [r for r in objects if r["status"] != "not tested"]
     timings = [abs(r["timing_ms"]) for r in objects if r.get("timing_ms") is not None and r["status"] == "found"]
     route = float(truth.get("route_length_m", 0))
     dist = analysis.get("distance_m")
     summary = {
-        "objects": len(objects), "found": found,
+        "objects": len(tested), "found": found, "not_tested": len(objects) - len(tested),
         "wrong_type": sum(r["status"] == "wrong type" for r in objects),
         "missed": sum(r["status"] == "missed" for r in objects),
         "false_alarms": len(false_alarms),
@@ -140,6 +144,8 @@ def summary_line(res: dict) -> str:
         parts.append(f"{s['wrong_type']} wrong type")
     if s["false_alarms"]:
         parts.append(f"{s['false_alarms']} false alarm{'s' if s['false_alarms'] != 1 else ''}")
+    if s.get("not_tested"):
+        parts.append(f"{s['not_tested']} not tested")
     if s["distance_error_pct"] is not None:
-        parts.append(f"distance {s['distance_m']} m ({s['distance_error_pct']:+.1f}%)")
+        parts.append(f"wheels turned {s['distance_m']} m of {s['route_m']:.1f} m ({s['distance_error_pct']:+.1f}%)")
     return ", ".join(parts)

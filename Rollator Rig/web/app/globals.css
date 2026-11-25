@@ -154,6 +154,7 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 .result-list .found .icon { color: var(--ok); }
 .result-list .missed .icon, .result-list .false-alarm .icon { color: var(--danger); }
 .result-list .wrong-type .icon { color: var(--warn); }
+.result-list .not-tested { color: var(--muted); }
 .result-list .when { color: var(--muted); font-variant-numeric: tabular-nums; }
 .result-list .note { grid-column: 2 / 4; color: var(--muted); font-size: 12px; }
 .chart { width: 100%; height: auto; background: var(--surface-2); border-radius: 8px; display: block; }

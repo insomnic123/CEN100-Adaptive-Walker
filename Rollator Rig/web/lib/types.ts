@@ -37,7 +37,7 @@ export const isZone = (o: CourseObject): o is ZoneObject =>
   o.type === "slope" || o.type === "cross" || o.type === "rough";
 
 // ---- results.json (pipeline/rig/score.py)
-export type ResultStatus = "found" | "missed" | "wrong type";
+export type ResultStatus = "found" | "missed" | "wrong type" | "not tested";
 export type ResultObject = {
   id?: string;
   type: CourseObject["type"];
@@ -57,6 +57,7 @@ export type RunResults =
       summary: {
         objects: number;
         found: number;
+        not_tested?: number;
         wrong_type: number;
         missed: number;
         false_alarms: number;

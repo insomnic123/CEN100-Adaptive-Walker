@@ -4,7 +4,7 @@ import type { Pt, RunResults } from "@/lib/types";
 
 type Ok = Extract<RunResults, { ok: true }>;
 
-const ICON = { found: "✓", missed: "✗", "wrong type": "~" } as const;
+const ICON = { found: "✓", missed: "✗", "wrong type": "~", "not tested": "–" } as const;
 
 export default function Results({ results }: { results: RunResults }) {
   if (!results.ok) return <p className="hint warn">Sensor kit: {results.message}</p>;
@@ -25,7 +25,7 @@ export default function Results({ results }: { results: RunResults }) {
             <span className="icon" aria-hidden>{ICON[o.status]}</span>
             <span className="label">{o.label}</span>
             <span className="when">
-              {o.status === "missed" ? "missed" : o.timing_ms !== undefined ? `${o.timing_ms >= 0 ? "+" : ""}${o.timing_ms} ms` : ""}
+              {o.status === "not tested" ? "not tested" : o.status === "missed" ? "missed" : o.timing_ms !== undefined ? `${o.timing_ms >= 0 ? "+" : ""}${o.timing_ms} ms` : ""}
             </span>
             {o.note && <span className="note">{o.note}</span>}
           </li>
@@ -45,8 +45,15 @@ export default function Results({ results }: { results: RunResults }) {
       <p className="hint">Grey: the course. Dashed: the path measured from the wheels and gyro.</p>
       {s.distance_m !== null && (
         <p className="hint">
-          Wheels measured {s.distance_m.toFixed(1)} m of {s.route_m.toFixed(1)} m
+          Wheels turned {s.distance_m.toFixed(1)} m of the course&apos;s {s.route_m.toFixed(1)} m
           {s.distance_error_pct !== null && ` (${s.distance_error_pct >= 0 ? "+" : ""}${s.distance_error_pct}%)`}
+        </p>
+      )}
+      {s.distance_error_pct !== null && Math.abs(s.distance_error_pct) > 8 && (
+        <p className="hint warn">
+          The wheels turned {s.distance_error_pct < 0 ? "less" : "more"} than the course asked: that&apos;s the rig, not
+          the sensors (the counts are right). The wheel servos have changed speed since calibration, usually a
+          weaker battery. Recalibrate with a fresh battery.
         </p>
       )}
     </div>

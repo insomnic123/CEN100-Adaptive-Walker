@@ -4,6 +4,8 @@
                                     deck rests straight and level at "centre". Set them live with
                                     `python rig_driver.py trim --port COMx`.
   yaw_sign                          -1 or 1: flip if the deck turns the wrong way in corners.
+  has_roll_servo                    0 or 1: set to 1 once a roll servo is on D11 (and HAS_ROLL_SERVO
+                                    in the sketch); until then cross-slopes aren't scored.
 
 A servo only reaches 0-180 degrees, so a yaw trim takes turning range from one side:
 with yaw_trim = 30 the deck can still turn 120 degrees one way but only 60 the other.
@@ -15,7 +17,7 @@ import json
 from .db import ROOT
 
 DECK_PATH = ROOT / "data" / "deck.json"
-DEFAULT = {"yaw_trim": 0, "pitch_trim": 0, "roll_trim": 0, "yaw_sign": -1}
+DEFAULT = {"yaw_trim": 0, "pitch_trim": 0, "roll_trim": 0, "yaw_sign": -1, "has_roll_servo": 0}
 TRIM_LIMIT = 60               # degrees either way; beyond this, re-seat the servo horn
 
 

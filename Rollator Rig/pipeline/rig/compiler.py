@@ -245,6 +245,7 @@ def compile_course(src, cal: dict | None = None) -> Compiled:
         "move_s": MOVE_AT_S,
         "yaw_start_deg": round(yaw_start, 1),       # deck's starting turn (left positive), see above
         "yaw_sign": yaw_sign,                       # yaw servo = 90 + yaw_sign * (heading + yaw_start)
+        "has_roll_servo": bool(deck.get("has_roll_servo")),   # without it cross-slopes can't be felt
         "wheel_calibrated": bool(cal.get("measured")),
         "peak_wheel_rps": round(peak_rps, 3),
         "objects": truth_objects,
