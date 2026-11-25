@@ -43,6 +43,34 @@ def summarise(c) -> None:
         print(f"  ERROR: {e}")
 
 
+ARDUINO_VIDS = {0x2341, 0x2A03}                      # genuine Arduino boards (a Mega clone may be 0x1A86)
+
+
+def resolve_ports(args) -> None:
+    """--port auto / --esp-port auto: the Mega by its Arduino USB id (or the port given), the ESP32 as
+    the one other USB serial port. Bluetooth and other non-USB ports are ignored."""
+    want_mega = getattr(args, "port", None) == "auto"
+    want_esp = getattr(args, "esp_port", None) == "auto"
+    if not (want_mega or want_esp):
+        return
+    from serial.tools import list_ports
+    usb = [p for p in list_ports.comports() if p.vid is not None]
+    listing = ", ".join(f"{p.device} ({p.description})" for p in usb) or "none"
+    if want_mega:
+        megas = [p for p in usb if p.vid in ARDUINO_VIDS]
+        if len(megas) != 1:
+            raise RigError(f"couldn't tell which port is the Mega (USB serial ports: {listing}); "
+                           "give it with --port COMx")
+        args.port = megas[0].device
+    if want_esp:
+        others = [p for p in usb if p.device != args.port]
+        if len(others) != 1:
+            raise RigError(f"couldn't tell which port is the ESP32 (USB serial ports: {listing}); "
+                           "give it with --esp-port COMx")
+        args.esp_port = others[0].device
+    print(f"ports: Mega {args.port}" + (f", ESP32 {args.esp_port}" if getattr(args, "esp_port", None) else ""))
+
+
 def cmd_ports(_args) -> int:
     from serial.tools import list_ports
     ports = list(list_ports.comports())
@@ -338,12 +366,14 @@ def main() -> int:
         p = sub.add_parser(name)
         if name == "run":
             p.add_argument("course", type=Path)
-        p.add_argument("--esp-port", help="the ESP32 running firmware/sensor_esp32: record and score the run")
-        p.add_argument("--port", help="e.g. COM3, /dev/ttyACM0, /dev/cu.usbmodem1101")
+        p.add_argument("--esp-port", help="the ESP32 running firmware/sensor_esp32 (COMx, or auto = "
+                                          "the one other USB serial port): record and score the run")
+        p.add_argument("--port", help="e.g. COM6, or auto (finds an Arduino by its USB id)")
         p.add_argument("--fake", action="store_true", help="use the software rig instead of the Mega")
         p.add_argument("--speedup", type=float, default=1.0, help="fake rig only: run faster than real time")
     args = ap.parse_args()
     try:
+        resolve_ports(args)
         return {"ports": cmd_ports, "spin": cmd_spin, "trim": cmd_trim, "calibrate": cmd_calibrate,
                 "compile": cmd_compile, "process": cmd_process,
                 "run": cmd_run, "watch": cmd_watch}[args.cmd](args)

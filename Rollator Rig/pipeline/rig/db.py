@@ -7,12 +7,45 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-DB_PATH = Path(os.environ.get("WALKER_DB", ROOT / "data" / "walker.db"))
+REPO_DB = ROOT / "data" / "walker.db"
+
+
+def _default_db() -> Path:
+    # On Windows the database lives in %LOCALAPPDATA%\RollatorRig, outside OneDrive: OneDrive syncing a
+    # SQLite file while the site and the watcher both use it causes "disk I/O error"s. web/lib/db.ts
+    # picks the same place. WALKER_DB overrides both.
+    local = os.environ.get("LOCALAPPDATA")
+    if os.name == "nt" and local:
+        return Path(local) / "RollatorRig" / "walker.db"
+    return REPO_DB
+
+
+DB_PATH = Path(os.environ.get("WALKER_DB") or _default_db())
 SCHEMA = ROOT / "data" / "schema.sql"
+
+
+def _migrate() -> None:
+    """First use of the new location: copy the courses and runs from the old data/walker.db."""
+    if DB_PATH.exists() or DB_PATH == REPO_DB or not REPO_DB.exists():
+        return
+    try:
+        src = sqlite3.connect(f"file:{REPO_DB}?mode=ro", uri=True, timeout=5)
+        dst = sqlite3.connect(DB_PATH)
+        src.backup(dst)
+        dst.close()
+        src.close()
+        print(f"  moved the database out of OneDrive: {DB_PATH}")
+    except sqlite3.Error as e:
+        print(f"  note: couldn't copy the old database ({e}); starting a fresh one at {DB_PATH}")
+        try:
+            DB_PATH.unlink()
+        except OSError:
+            pass
 
 
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _migrate()
     con = sqlite3.connect(DB_PATH, timeout=5)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
