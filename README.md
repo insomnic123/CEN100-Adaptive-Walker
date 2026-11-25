@@ -3,6 +3,16 @@
 *This project was created for TMU's CEN100 Course. README made with the assistance of Claude.*
 
 ---
+### A Brief Preamble on AI & It's Uses
+All major design choices, including but not limited to connection types, protocols used, hardware & softwares used 
+(in addition to specific wiring decisions), website flow, etc, were designed by humans. Permissable AI use was 
+considered only if the programmer would be able to code and explain the code effectively, if not code it 
+seldomly if given more time.
+
+AI was used sparingly in harder technical aspects to ensure an effective learning outcome, and proved more helpful and 
+commonplace in generating or helping fix boilerplate/filler code quickly and effectively. It was also used to 
+generate code comments and fix persistent issues given time constraints, but in limited contexts. 
+Text documents, such as this, were formed either entirely by humans, or from human notes, and later revised as needed.
 
 ## The Project: A non-technical synopsis
 
