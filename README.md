@@ -1,4 +1,4 @@
-# Adaptive Walker: a sensor kit that maps hidden sidewalk barriers
+# G29-Walker: a sensor kit that maps hidden sidewalk barriers
 
 *This project was created for TMU's CEN100 Course. README made with the assistance of Claude.*
 
