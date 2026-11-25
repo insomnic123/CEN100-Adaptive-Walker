@@ -51,7 +51,7 @@ Future implementations for V2 of the **prototype** (i.e, not the final vers.) wi
 
 ---
 
-## Part 2: What's in this repository
+## What's in this repository
 
 | Folder | What it holds |
 | --- | --- |
@@ -65,7 +65,7 @@ Future implementations for V2 of the **prototype** (i.e, not the final vers.) wi
 
 ---
 
-## Part 3: Technical overview
+## Technical overview
 
 ### Architecture
 
@@ -197,7 +197,7 @@ imitate a leaning yaw axis or cardboard flex.
 
 ---
 
-## Part 4: Q&A: design rationale (hard questions)
+## Technical Rationale
 
 **Q: You score the kit against an answer key you generated yourself. Isn't that circular?**
 A: The answer key says what the rig was *told* to do; the kit only sees what physically *happened* to
