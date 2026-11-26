@@ -199,7 +199,7 @@ export function objectLabel(o: CourseObject): string {
 export const EXAMPLE_COURSE: Course = {
   name: "L-loop with curb",
   walker: { speed_mps: 0.8, wheel_circ_m: 0.64, track_m: 0.5 },
-  rig: { time_scale: 2.5 },
+  rig: { time_scale: 3 },
   corner_radius_m: 1.0,
   path: [[3, 3], [3, 11], [13, 11], [13, 20], [24, 20]],
   objects: [
