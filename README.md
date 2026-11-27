@@ -1,6 +1,6 @@
 # G29-Walker: a sensor kit that maps hidden sidewalk barriers
 
-*This project was created for TMU's CEN100 Course. README made with the assistance of Claude.*
+*This project was created for TMU's CEN100 Course.*
 
 ---
 ### A Brief Preamble on AI & It's Uses
